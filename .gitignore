@@ -1,0 +1,43 @@
+# ==============================================================================
+# Git Ignore - n8n Local Automation Stack
+# ==============================================================================
+
+# Archivos de configuración local y secretos (NUNCA SUBIR A GITHUB)
+.env
+.env.local
+.env.*.local
+*.env
+!.env.example
+
+# Datos persistentes locales, bases de datos y archivos de flujos
+data/
+data/**
+local-files/*
+!local-files/.gitkeep
+
+# Claves privadas, certificados y credenciales
+*.pem
+*.key
+*.cert
+*.crt
+*.pfx
+*.p12
+credentials.json
+id_rsa*
+
+# Registros y archivos temporales
+*.log
+*.tmp
+*.bak
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Archivos del sistema operativo y editores
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
+*.sublime-project
+*.sublime-workspace

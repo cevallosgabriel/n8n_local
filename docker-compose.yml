@@ -1,0 +1,32 @@
+services:
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: ${CONTAINER_NAME:-n8n_production}
+    restart: unless-stopped
+    ports:
+      - "${N8N_PORT:-5678}:5678"
+    env_file:
+      - .env
+    volumes:
+      # Volumen persistente para flujos, credenciales y base de datos SQLite
+      - ${DATA_VOLUME_NAME:-n8n_storage_data}:/home/node/.n8n
+      # Carpeta local para intercambio de archivos con el host
+      - ./local-files:/files:rw
+    extra_hosts:
+      # Permite comunicar n8n con bases de datos o servicios del host (MySQL, Postgres, APIs locales)
+      - "host.docker.internal:host-gateway"
+
+  # Servicio opcional de Cloudflare Tunnel (se activa solo si se define el perfil 'tunnel' o token)
+  cloudflare-tunnel:
+    image: cloudflare/cloudflared:latest
+    container_name: n8n_cloudflare_tunnel
+    restart: unless-stopped
+    profiles:
+      - tunnel
+    command: tunnel run --token ${CLOUDFLARE_TUNNEL_TOKEN}
+    depends_on:
+      - n8n
+
+volumes:
+  n8n_storage_data:
+    name: ${DATA_VOLUME_NAME:-n8n_storage_data}
