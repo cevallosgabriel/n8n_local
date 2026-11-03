@@ -23,7 +23,7 @@ services:
     restart: unless-stopped
     profiles:
       - tunnel
-    command: tunnel run --token ${CLOUDFLARE_TUNNEL_TOKEN}
+    command: tunnel run --token ${CLOUDFLARE_TUNNEL_TOKEN:-}
     depends_on:
       - n8n
 
