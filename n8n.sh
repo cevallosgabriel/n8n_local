@@ -21,14 +21,39 @@ set_env() {
     fi
 }
 
+sync_encryption_key() {
+    local config_file="data/config"
+    local config_key=""
+    if [ -f "$config_file" ]; then
+        config_key=$(grep -oE '"encryptionKey"\s*:\s*"[^"]+"' "$config_file" 2>/dev/null | cut -d '"' -f4)
+    fi
+
+    local env_key
+    env_key=$(get_env "N8N_ENCRYPTION_KEY" "")
+
+    if [ -n "$config_key" ]; then
+        if [ "$env_key" != "$config_key" ]; then
+            set_env "N8N_ENCRYPTION_KEY" "$config_key"
+        fi
+        export N8N_ENCRYPTION_KEY="$config_key"
+    elif [ -n "$env_key" ]; then
+        mkdir -p data
+        printf '{\n\t"encryptionKey": "%s"\n}\n' "$env_key" > "$config_file"
+        export N8N_ENCRYPTION_KEY="$env_key"
+    else
+        local new_key
+        new_key=$(openssl rand -hex 32 2>/dev/null || od -vN 32 -An -tx1 /dev/urandom | tr -d ' \n')
+        set_env "N8N_ENCRYPTION_KEY" "$new_key"
+        mkdir -p data
+        printf '{\n\t"encryptionKey": "%s"\n}\n' "$new_key" > "$config_file"
+        export N8N_ENCRYPTION_KEY="$new_key"
+    fi
+}
+
 # Ensure persistent key and safe permissions
 [ -z "$(get_env "N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS" "")" ] && set_env "N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS" "false"
 [ -z "$(get_env "N8N_USER_FOLDER" "")" ] && set_env "N8N_USER_FOLDER" "./data"
-ENC_KEY=$(get_env "N8N_ENCRYPTION_KEY" "")
-if [ -z "$ENC_KEY" ]; then
-    NEW_KEY=$(openssl rand -hex 32 2>/dev/null || od -vN 32 -An -tx1 /dev/urandom | tr -d ' \n')
-    [ -n "$NEW_KEY" ] && set_env "N8N_ENCRYPTION_KEY" "$NEW_KEY"
-fi
+sync_encryption_key
 
 PORT=$(get_env "N8N_PORT" "5678")
 PORT=${PORT:-5678}

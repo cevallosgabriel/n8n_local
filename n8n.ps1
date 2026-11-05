@@ -56,25 +56,7 @@ function Initialize-Environment {
         Set-EnvFileVar "N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS" "false"
     }
 
-    $encKey = Get-EnvVar "N8N_ENCRYPTION_KEY" ""
-    $configPath = Join-Path $PSScriptRoot "data\config"
-    if (-not $encKey) {
-        if (Test-Path $configPath) {
-            try {
-                $cfgJson = Get-Content $configPath -Raw | ConvertFrom-Json
-                if ($cfgJson.encryptionKey) {
-                    $encKey = $cfgJson.encryptionKey
-                    Set-EnvFileVar "N8N_ENCRYPTION_KEY" $encKey
-                }
-            } catch {}
-        }
-        if (-not $encKey) {
-            $bytes = New-Object byte[] 32
-            [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
-            $encKey = ($bytes | ForEach-Object { $_.ToString("x2") }) -join ""
-            Set-EnvFileVar "N8N_ENCRYPTION_KEY" $encKey
-        }
-    }
+    Sync-EncryptionKey | Out-Null
 
     $dataDb = Join-Path $PSScriptRoot "data\database.sqlite"
     $homeDb = Join-Path $env:USERPROFILE ".n8n\database.sqlite"
@@ -83,6 +65,48 @@ function Initialize-Environment {
         Copy-Item "$env:USERPROFILE\.n8n\*" -Destination (Join-Path $PSScriptRoot "data") -Recurse -Force -ErrorAction SilentlyContinue
         Write-Host "[OK] Datos previos migrados a data/ exitosamente." -ForegroundColor Green
     }
+}
+
+function Sync-EncryptionKey {
+    $configPath = Join-Path $PSScriptRoot "data\config"
+    $keyFromConfig = $null
+
+    if (Test-Path $configPath) {
+        try {
+            $rawConfig = Get-Content $configPath -Raw -Encoding utf8 -ErrorAction SilentlyContinue
+            if ($rawConfig -match '"encryptionKey"\s*:\s*"([^"]+)"') {
+                $keyFromConfig = $matches[1].Trim()
+            }
+        } catch {}
+    }
+
+    $keyFromEnv = Get-EnvVar "N8N_ENCRYPTION_KEY" ""
+
+    if ($keyFromConfig) {
+        if ($keyFromEnv -ne $keyFromConfig) {
+            Write-Host "[*] Sincronizando N8N_ENCRYPTION_KEY con clave existente de data/config..." -ForegroundColor Cyan
+            Set-EnvFileVar "N8N_ENCRYPTION_KEY" $keyFromConfig
+        }
+        $finalKey = $keyFromConfig
+    } elseif ($keyFromEnv) {
+        if (-not (Test-Path "data")) { New-Item -ItemType Directory -Path "data" -Force | Out-Null }
+        $jsonStr = "{`n`t`"encryptionKey`": `"$keyFromEnv`"`n}"
+        [System.IO.File]::WriteAllText($configPath, $jsonStr, [System.Text.UTF8Encoding]::new($false))
+        $finalKey = $keyFromEnv
+    } else {
+        $bytes = New-Object byte[] 32
+        [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+        $newKey = ($bytes | ForEach-Object { $_.ToString("x2") }) -join ""
+        Set-EnvFileVar "N8N_ENCRYPTION_KEY" $newKey
+        if (-not (Test-Path "data")) { New-Item -ItemType Directory -Path "data" -Force | Out-Null }
+        $jsonStr = "{`n`t`"encryptionKey`": `"$newKey`"`n}"
+        [System.IO.File]::WriteAllText($configPath, $jsonStr, [System.Text.UTF8Encoding]::new($false))
+        $finalKey = $newKey
+    }
+
+    [Environment]::SetEnvironmentVariable("N8N_ENCRYPTION_KEY", $finalKey, "Process")
+    $env:N8N_ENCRYPTION_KEY = $finalKey
+    return $finalKey
 }
 
 function Load-EnvToProcess {
@@ -340,9 +364,11 @@ function Start-NodeMode([bool]$useTunnel) {
         }
     }
 
+    Sync-EncryptionKey | Out-Null
+
     Write-Host "[*] Iniciando n8n Server nativo..." -ForegroundColor Cyan
     $n8nCmdLine = "title n8n Server (Node.js) && `"$n8nBin`" start"
-    Start-Process cmd.exe -ArgumentList "/c `"$n8nCmdLine`"" -WorkingDirectory $PSScriptRoot
+    Start-Process cmd.exe -ArgumentList "/k `"$n8nCmdLine`"" -WorkingDirectory $PSScriptRoot
 
     Write-Host "[*] Esperando a que n8n responda..." -NoNewline -ForegroundColor Yellow
     $ready = $false
