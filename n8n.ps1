@@ -12,14 +12,8 @@ if (-not (Test-Path ".env")) {
         Copy-Item ".env.example" ".env"
     }
 }
-
-if (-not (Test-Path "local-files")) {
-    New-Item -ItemType Directory -Path "local-files" -Force | Out-Null
-}
-
-if (-not (Test-Path "data")) {
-    New-Item -ItemType Directory -Path "data" -Force | Out-Null
-}
+if (-not (Test-Path "local-files")) { New-Item -ItemType Directory -Path "local-files" -Force | Out-Null }
+if (-not (Test-Path "data")) { New-Item -ItemType Directory -Path "data" -Force | Out-Null }
 
 function Get-EnvVar([string]$key, [string]$default = "") {
     if (Test-Path ".env") {
@@ -44,9 +38,7 @@ function Set-EnvFileVar([string]$key, [string]$val) {
                 $line
             }
         }
-        if (-not $found) {
-            $newLines += "$key=$val"
-        }
+        if (-not $found) { $newLines += "$key=$val" }
         $newLines | Set-Content ".env" -Encoding utf8
     }
 }
@@ -95,8 +87,13 @@ function Get-NodeExecutable {
 function Get-CloudflaredExecutable {
     $cmd = Get-Command "cloudflared" -ErrorAction SilentlyContinue
     if ($cmd) { return $cmd.Source }
-    $p = "$env:LOCALAPPDATA\Programs\Cloudflared\cloudflared.exe"
-    if (Test-Path $p) { return $p }
+    $paths = @(
+        "$env:LOCALAPPDATA\Programs\Cloudflared\cloudflared.exe",
+        "$PSScriptRoot\tools\cloudflared.exe"
+    )
+    foreach ($p in $paths) {
+        if (Test-Path $p) { return $p }
+    }
     return $null
 }
 
@@ -120,9 +117,14 @@ function Start-CloudflareTunnel([string]$localPort) {
     if (Test-Path $logFile) { Remove-Item $logFile -Force }
     
     Write-Host "[*] Levantando Cloudflare Quick Tunnel..." -ForegroundColor Cyan
-    Start-Process -FilePath $cfExe -ArgumentList "--logfile `"$logFile`" tunnel --url http://localhost:$localPort" -WindowStyle Hidden
+    $cfCmdLine = "`"$cfExe`" --logfile `"$logFile`" tunnel --url http://localhost:$localPort"
+    try {
+        $null = wmic process call create $cfCmdLine
+    } catch {
+        Start-Process -FilePath $cfExe -ArgumentList "--logfile `"$logFile`" tunnel --url http://localhost:$localPort" -WindowStyle Hidden
+    }
     
-    $timeout = 20
+    $timeout = 25
     $elapsed = 0
     $tunnelUrl = $null
     while ($elapsed -lt $timeout) {
@@ -144,26 +146,30 @@ function Start-CloudflareTunnel([string]$localPort) {
         Write-Host "[OK] URL Publica HTTPS generada: $tunnelUrl" -ForegroundColor Green
         return $tunnelUrl
     } else {
-        Write-Host "[!] No se pudo obtener la URL de Cloudflare en 20s. Continuando..." -ForegroundColor Yellow
+        Write-Host "[!] No se pudo obtener la URL de Cloudflare en 25s. Continuando..." -ForegroundColor Yellow
         return $null
     }
 }
 
 function Start-DockerMode([bool]$useTunnel) {
     $dockerExe = Get-DockerExecutable
-    if (-not $dockerExe) {
-        Write-Host "[ERROR] Docker Desktop no esta instalado en este sistema." -ForegroundColor Red
-        Write-Host "Usa la opcion de Node.js o instala Docker Desktop." -ForegroundColor Yellow
+    $dockerCmd = Get-Command "docker" -ErrorAction SilentlyContinue
+
+    if (-not $dockerExe -and -not $dockerCmd) {
+        Write-Host "`n[ERROR] Docker Desktop no esta instalado en este sistema." -ForegroundColor Red
+        Write-Host "Sugerencia: Usa la opcion de Node.js (opciones 3 o 4) para ejecutar n8n sin Docker." -ForegroundColor Yellow
         return
     }
 
     $dockerReady = $false
-    try {
-        $null = docker info 2>$null
-        if ($LASTEXITCODE -eq 0) { $dockerReady = $true }
-    } catch {}
+    if ($dockerCmd) {
+        try {
+            $null = docker info 2>$null
+            if ($LASTEXITCODE -eq 0) { $dockerReady = $true }
+        } catch {}
+    }
 
-    if (-not $dockerReady) {
+    if (-not $dockerReady -and $dockerExe) {
         Write-Host "[*] Iniciando Docker Desktop..." -ForegroundColor Cyan
         try {
             $null = wmic process call create "`"$dockerExe`""
@@ -176,13 +182,20 @@ function Start-DockerMode([bool]$useTunnel) {
         while (-not $dockerReady -and $elapsed -lt $timeout) {
             Start-Sleep -Seconds 3
             $elapsed += 3
-            try {
-                $null = docker info 2>$null
-                if ($LASTEXITCODE -eq 0) { $dockerReady = $true }
-            } catch {}
+            if (Get-Command "docker" -ErrorAction SilentlyContinue) {
+                try {
+                    $null = docker info 2>$null
+                    if ($LASTEXITCODE -eq 0) { $dockerReady = $true }
+                } catch {}
+            }
             Write-Host "." -NoNewline
         }
         Write-Host ""
+    }
+
+    if (-not $dockerReady) {
+        Write-Host "[ERROR] El motor de Docker no respondio. Verifica si Docker Desktop esta abierto." -ForegroundColor Red
+        return
     }
 
     $envPort = Get-EnvVar "N8N_PORT" "5678"
@@ -202,8 +215,18 @@ function Start-DockerMode([bool]$useTunnel) {
 function Start-NodeMode([bool]$useTunnel) {
     $nodeExe = Get-NodeExecutable
     if (-not $nodeExe) {
-        Write-Host "[ERROR] Node.js no esta instalado. Instala Node.js v20 o v24 para usar este modo." -ForegroundColor Red
+        Write-Host "`n[ERROR] Node.js no esta instalado en este equipo." -ForegroundColor Red
+        Write-Host "Instala Node.js v20 o v24 LTS para usar este modo: https://nodejs.org/" -ForegroundColor Yellow
         return
+    }
+
+    $nodeVer = (& $nodeExe -v 2>$null)
+    if ($nodeVer -match "^v(\d+)\.") {
+        $major = [int]$matches[1]
+        if ($major -gt 24) {
+            Write-Host "`n[ALERTA] Se detecto Node.js $nodeVer." -ForegroundColor Yellow
+            Write-Host "n8n en Windows funciona de forma optima con Node.js v20 o v24 LTS (tienen binarios precompilados)." -ForegroundColor Yellow
+        }
     }
 
     $n8nCmd = Get-Command "n8n" -ErrorAction SilentlyContinue
@@ -239,7 +262,7 @@ function Start-NodeMode([bool]$useTunnel) {
 
     Write-Host "[*] Esperando a que n8n responda..." -NoNewline -ForegroundColor Yellow
     $ready = $false
-    for ($i = 0; $i -lt 25; $i++) {
+    for ($i = 0; $i -lt 30; $i++) {
         Start-Sleep -Seconds 1
         Write-Host "." -NoNewline
         try {
@@ -248,13 +271,19 @@ function Start-NodeMode([bool]$useTunnel) {
         } catch {}
     }
     Write-Host ""
-    Write-Host "[OK] n8n nativo esta listo en http://localhost:$envPort" -ForegroundColor Green
-    Start-Process "http://localhost:$envPort"
+    if ($ready) {
+        Write-Host "[OK] n8n nativo esta listo en http://localhost:$envPort" -ForegroundColor Green
+        Start-Process "http://localhost:$envPort"
+    } else {
+        Write-Host "[!] El servidor inicio. Abre tu navegador en: http://localhost:$envPort" -ForegroundColor Yellow
+    }
 }
 
 function Stop-AllServices {
-    Write-Host "[*] Deteniendo servicios..." -ForegroundColor Yellow
-    try { docker compose down 2>$null } catch {}
+    Write-Host "[*] Deteniendo todos los servicios..." -ForegroundColor Yellow
+    if (Get-Command "docker" -ErrorAction SilentlyContinue) {
+        try { docker compose down 2>$null } catch {}
+    }
     Stop-Process -Name "cloudflared" -Force -ErrorAction SilentlyContinue
     
     Get-Process -Name "node" -ErrorAction SilentlyContinue | ForEach-Object {
@@ -266,7 +295,7 @@ function Stop-AllServices {
     
     if (Test-Path "$PSScriptRoot\.cloudflare.url") { Remove-Item "$PSScriptRoot\.cloudflare.url" -Force }
     if (Test-Path "$PSScriptRoot\.cloudflare.log") { Remove-Item "$PSScriptRoot\.cloudflare.log" -Force }
-    Write-Host "[OK] Todos los servicios detenidos." -ForegroundColor Green
+    Write-Host "[OK] Todos los servicios han sido detenidos." -ForegroundColor Green
 }
 
 function Show-Status {
@@ -292,17 +321,45 @@ function Show-Status {
     
     $cfProc = Get-Process -Name "cloudflared" -ErrorAction SilentlyContinue
     if ($cfProc -and (Test-Path "$PSScriptRoot\.cloudflare.url")) {
-        $url = Get-Content "$PSScriptRoot\.cloudflare.url" -Raw
-        Write-Host "Túnel Publico: $url (Activo)" -ForegroundColor Green
+        $url = (Get-Content "$PSScriptRoot\.cloudflare.url" -Raw).Trim()
+        Write-Host "Tunel Publico: $url (Activo)" -ForegroundColor Green
     } else {
-        Write-Host "Túnel Publico: Inactivo" -ForegroundColor Gray
+        Write-Host "Tunel Publico: Inactivo" -ForegroundColor Gray
+    }
+
+    $nodePids = @()
+    $portProcId = (Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique)
+    if ($portProcId) {
+        $proc = Get-Process -Id $portProcId -ErrorAction SilentlyContinue
+        if ($proc -and $proc.ProcessName -match "node") {
+            $nodePids += $portProcId
+        }
+    }
+    Get-Process -Name "node" -ErrorAction SilentlyContinue | ForEach-Object {
+        if ($_.MainWindowTitle -match "n8n" -and $nodePids -notcontains $_.Id) {
+            $nodePids += $_.Id
+        }
+    }
+    if ($nodePids.Count -gt 0) {
+        $pidStr = $nodePids -join ", "
+        Write-Host "Motor Node.js: Activo (PID: $pidStr)" -ForegroundColor Green
+    } else {
+        Write-Host "Motor Node.js: Inactivo" -ForegroundColor Gray
     }
     
-    $dockerPs = docker ps --filter "name=n8n" --format "{{.Names}} ({{.Status}})" 2>$null
-    if ($dockerPs) {
-        Write-Host "Docker:        $dockerPs" -ForegroundColor Green
+    if (Get-Command "docker" -ErrorAction SilentlyContinue) {
+        try {
+            $dockerPs = & docker ps --filter "name=n8n" --format "{{.Names}} ({{.Status}})" 2>$null
+            if ($dockerPs) {
+                Write-Host "Motor Docker:  Activo ($dockerPs)" -ForegroundColor Green
+            } else {
+                Write-Host "Motor Docker:  Instalado (Sin contenedores n8n activos)" -ForegroundColor Gray
+            }
+        } catch {
+            Write-Host "Motor Docker:  Instalado (Daemon detenido)" -ForegroundColor Yellow
+        }
     } else {
-        Write-Host "Docker:        Sin contenedores n8n activos" -ForegroundColor Gray
+        Write-Host "Motor Docker:  No instalado en el equipo" -ForegroundColor Gray
     }
     Write-Host "==========================================================" -ForegroundColor Cyan
 }
@@ -315,41 +372,44 @@ switch ($Action) {
     "stop"           { Stop-AllServices }
     "status"         { Show-Status }
     "menu" {
-        Clear-Host
-        $hasDocker = [bool](Get-DockerExecutable)
-        $hasNode = [bool](Get-NodeExecutable)
-        $cpuVt = $false
-        try {
-            $cpuVt = [bool]((Get-CimInstance Win32_Processor).VirtualizationFirmwareEnabled)
-        } catch {}
+        while ($true) {
+            Clear-Host
+            $hasDocker = [bool](Get-DockerExecutable)
+            $hasNode = [bool](Get-NodeExecutable)
+            $cpuVt = $false
+            try {
+                $cpuVt = [bool]((Get-CimInstance Win32_Processor).VirtualizationFirmwareEnabled)
+            } catch {}
 
-        Write-Host "==========================================================" -ForegroundColor Cyan
-        Write-Host "               n8n Unified Stack Manager                  " -ForegroundColor Cyan
-        Write-Host "==========================================================" -ForegroundColor Cyan
-        Write-Host "Entorno detectado:" -ForegroundColor White
-        Write-Host "  * Docker:         $(if ($hasDocker) { 'Disponible' } else { 'No instalado' })"
-        Write-Host "  * Virtualización: $(if ($cpuVt) { 'Habilitada' } else { 'Deshabilitada (Recomendado usar Node.js)' })"
-        Write-Host "  * Node.js:        $(if ($hasNode) { 'Disponible' } else { 'No instalado' })"
-        Write-Host "----------------------------------------------------------" -ForegroundColor Gray
-        Write-Host "Opciones:" -ForegroundColor White
-        Write-Host "  [1] Iniciar con Docker (Localhost)"
-        Write-Host "  [2] Iniciar con Docker + Cloudflare Tunnel (Webhook Publico)"
-        Write-Host "  [3] Iniciar con Node.js (Localhost - Ligero, ideal para 8GB RAM)"
-        Write-Host "  [4] Iniciar con Node.js + Cloudflare Tunnel (Ligero + Webhook)"
-        Write-Host "  [5] Detener todos los servicios"
-        Write-Host "  [6] Ver estado"
-        Write-Host "  [0] Salir"
-        Write-Host "==========================================================" -ForegroundColor Cyan
-        
-        $opt = Read-Host "Selecciona una opción (0-6)"
-        switch ($opt) {
-            "1" { Start-DockerMode $false }
-            "2" { Start-DockerMode $true }
-            "3" { Start-NodeMode $false }
-            "4" { Start-NodeMode $true }
-            "5" { Stop-AllServices }
-            "6" { Show-Status }
-            default { Write-Host "Operación cancelada." }
+            Write-Host "==========================================================" -ForegroundColor Cyan
+            Write-Host "               n8n Unified Stack Manager                  " -ForegroundColor Cyan
+            Write-Host "==========================================================" -ForegroundColor Cyan
+            Write-Host "Entorno detectado:" -ForegroundColor White
+            Write-Host "  * Docker:         $(if ($hasDocker) { 'Disponible' } else { 'No instalado' })"
+            Write-Host "  * Virtualización: $(if ($cpuVt) { 'Habilitada' } else { 'Deshabilitada (Usa Node.js)' })"
+            Write-Host "  * Node.js:        $(if ($hasNode) { 'Disponible' } else { 'No instalado' })"
+            Write-Host "----------------------------------------------------------" -ForegroundColor Gray
+            Write-Host "Opciones:" -ForegroundColor White
+            Write-Host "  [1] Iniciar con Docker (Localhost)"
+            Write-Host "  [2] Iniciar con Docker + Cloudflare Tunnel (Webhook Publico)"
+            Write-Host "  [3] Iniciar con Node.js (Localhost - Ligero, ideal para 8GB RAM)"
+            Write-Host "  [4] Iniciar con Node.js + Cloudflare Tunnel (Ligero + Webhook)"
+            Write-Host "  [5] Detener todos los servicios"
+            Write-Host "  [6] Ver estado"
+            Write-Host "  [0] Salir"
+            Write-Host "==========================================================" -ForegroundColor Cyan
+            
+            $opt = Read-Host "Selecciona una opción (0-6)"
+            switch ($opt) {
+                "1" { Start-DockerMode $false; Read-Host "`nPresiona Enter para volver al menú..." }
+                "2" { Start-DockerMode $true; Read-Host "`nPresiona Enter para volver al menú..." }
+                "3" { Start-NodeMode $false; Read-Host "`nPresiona Enter para volver al menú..." }
+                "4" { Start-NodeMode $true; Read-Host "`nPresiona Enter para volver al menú..." }
+                "5" { Stop-AllServices; Read-Host "`nPresiona Enter para volver al menú..." }
+                "6" { Show-Status; Read-Host "`nPresiona Enter para volver al menú..." }
+                "0" { Write-Host "Saliendo..."; exit 0 }
+                default { Write-Host "Opción no válida."; Start-Sleep -Seconds 1 }
+            }
         }
     }
 }
