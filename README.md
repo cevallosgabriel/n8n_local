@@ -1,109 +1,92 @@
-# 🚀 n8n Local Automation Stack
+# 🚀 n8n Unified Local Stack
 
 [![Docker](https://img.shields.io/badge/Docker-Ready-blue.svg)](https://www.docker.com/)
-[![n8n](https://img.shields.io/badge/n8n-Community%20Edition-EA4B71.svg)](https://n8n.io/)
+[![Node.js](https://img.shields.io/badge/Node.js-Ready-green.svg)](https://nodejs.org/)
+[![Cloudflare](https://img.shields.io/badge/Cloudflare-Tunnel-orange.svg)](https://www.cloudflare.com/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey.svg)]()
 
-Entorno de automatización local basado en **n8n Community Edition (Gratis)**. Listo para ejecutarse con persistencia de datos, soporte de túneles externos para webhooks y comunicación directa con servicios locales.
+Gestor de automatización unificado para **n8n Community Edition**. Diseñado para adaptarse dinámicamente a cualquier entorno: funciona tanto con **Docker** como de forma nativa con **Node.js** (ideal para equipos con 8 GB de RAM o sin virtualización activada en BIOS), con soporte integrado para **Cloudflare Tunnel** (URLs públicas HTTPS inmediatas sin abrir puertos).
 
 ---
 
-## 💻 Requisitos y Limitaciones de Hardware
+## 💻 Requisitos y Compatibilidad
 
-| Componente | Requisito Mínimo | Recomendado |
-| :--- | :--- | :--- |
-| **Memoria RAM** | **8 GB** | **16 GB o más** |
-| **CPU** | 2 núcleos | 4 núcleos |
-| **Almacenamiento** | 5 GB libres | 10 GB o más |
-
-> ⚠️ **Advertencia de rendimiento:**
-> * Equipos con **menos de 8 GB de RAM** experimentarán fallos de memoria, lentitud extrema o cierres inesperados al utilizar Docker.
-> * En equipos de 8 GB de RAM, se recomienda no mantener múltiples aplicaciones pesadas abiertas simultáneamente mientras Docker esté en ejecución.
+| Entorno | RAM Mínima | Virtualización (VT-x / AMD-V) | Recomendado para |
+| :--- | :--- | :--- | :--- |
+| **Modo Docker** | 8 GB | Requerida | Entornos con Docker Desktop ya operativo |
+| **Modo Node.js** | 4 GB - 8 GB | **No requerida** | Equipos de 8GB RAM, Windows modificado o sin virtualización |
 
 ---
 
-## 🚀 Inicio Rápido
+## 🚀 Inicio en 1 Clic
 
-### En Windows (PowerShell):
+### En Windows:
+Haz doble clic en **`n8n.bat`** o ejecuta en PowerShell:
 ```powershell
-# Iniciar n8n:
-.\start.ps1
-
-# O iniciar con túnel público para webhooks:
-.\start.ps1 -Tunnel cloudflare
-# o bien:
-.\start.ps1 -Tunnel ngrok
+.\n8n.ps1
 ```
 
-### En Linux / macOS (Terminal):
+Aparecerá el menú interactivo:
+
+```text
+==========================================================
+               n8n Unified Stack Manager                  
+==========================================================
+Entorno detectado:
+  * Docker:         Disponible / No instalado
+  * Virtualización: Habilitada / Deshabilitada (Usa Node.js)
+  * Node.js:        Disponible / No instalado
+----------------------------------------------------------
+Opciones:
+  [1] Iniciar con Docker (Localhost)
+  [2] Iniciar con Docker + Cloudflare Tunnel (Webhook Público)
+  [3] Iniciar con Node.js (Localhost - Ligero, ideal para 8GB RAM)
+  [4] Iniciar con Node.js + Cloudflare Tunnel (Ligero + Webhook)
+  [5] Detener todos los servicios
+  [6] Ver estado
+  [0] Salir
+==========================================================
+```
+
+### Ejecución directa por comando (CLI):
+```powershell
+.\n8n.ps1 -Action docker-local     # Docker en http://localhost:5678
+.\n8n.ps1 -Action docker-tunnel    # Docker + URL pública Cloudflare
+.\n8n.ps1 -Action node-local       # Node.js nativo (Bajo consumo de RAM)
+.\n8n.ps1 -Action node-tunnel      # Node.js + URL pública Cloudflare
+.\n8n.ps1 -Action stop             # Detener todo
+.\n8n.ps1 -Action status           # Ver estado del sistema
+```
+
+### En Linux / macOS:
 ```bash
-chmod +x start.sh stop.sh
-./start.sh
-```
-
-El script se encargará automáticamente de:
-1. Generar el archivo `.env` a partir de `.env.example` si no existe.
-2. Comprobar que Docker esté instalado y en ejecución.
-3. Desplegar los contenedores en segundo plano.
-4. Abrir la interfaz web en **`http://localhost:5678`**.
-
-Para detener el entorno:
-```powershell
-# Windows:
-.\stop.ps1
-
-# Linux / macOS:
-./stop.sh
+chmod +x n8n.sh
+./n8n.sh
 ```
 
 ---
 
-## ⚙️ Configuración (.env)
+## 🌐 Webhooks con Cloudflare Tunnel
 
-El archivo `.env` permite ajustar parámetros básicos sin modificar los contenedores:
-
-| Variable | Valor por Defecto | Descripción |
-| :--- | :--- | :--- |
-| `N8N_PORT` | `5678` | Puerto de acceso a n8n |
-| `GENERIC_TIMEZONE` | `America/Bogota` | Zona horaria para tareas programadas |
-| `TZ` | `America/Bogota` | Zona horaria del contenedor |
-| `N8N_SSRF_PROTECTION_ENABLED` | `false` | Permite o bloquea peticiones a direcciones locales |
-| `WEBHOOK_URL` | *(Vacío)* | URL pública HTTPS si se utiliza un túnel o dominio |
+Si seleccionas cualquiera de las opciones con túnel (Opción 2 o 4):
+1. El script descarga e inicia `cloudflared` de forma automática y transparente.
+2. Genera una URL pública segura del tipo `https://xxxx.trycloudflare.com/`.
+3. Inyecta automáticamente dicha URL en `WEBHOOK_URL` para que nodos como **Telegram, WhatsApp, Stripe o GitHub** funcionen al instante.
 
 ---
 
-## 🌐 Webhooks Públicos (Túneles)
+## 📁 Persistencia de Datos
 
-Para recibir eventos desde servicios externos en internet (webhooks con HTTPS):
-
-* **Cloudflare Tunnel:** `.\start.ps1 -Tunnel cloudflare`
-* **Ngrok:** `.\start.ps1 -Tunnel ngrok`
-
-Copia la URL pública generada, asígnala a `WEBHOOK_URL` en tu `.env` y reinicia con `docker compose up -d`.
-
----
-
-## 🔌 Servicios y Bases de Datos Locales
-
-Para conectar n8n con bases de datos o servicios que corren en la máquina anfitriona fuera de Docker:
-
-* **Host a utilizar:** `host.docker.internal`
-* **Puertos habituales:** MySQL (`3306`), PostgreSQL (`5432`), SQL Server (`1433`), MongoDB (`27017`), Redis (`6379`).
-
----
-
-## 🔒 Privacidad y Seguridad
-
-* El archivo `.env`, historiales de flujos y datos locales están ignorados en `.gitignore` para prevenir filtraciones accidentales.
-* Usa siempre `.env.example` como plantilla base al compartir o clonar el proyecto.
+* **Modo Docker:** Los datos se almacenan en el volumen de Docker configurado en `docker-compose.yml`.
+* **Modo Node.js:** Los datos se guardan de forma persistente dentro de la carpeta local `data/` del proyecto.
+* Ningún dato sensible, flujo o credencial se sube a GitHub gracias al `.gitignore`.
 
 ---
 
 ## 📄 Licencia y Descargo Legal
 
-Este proyecto es una herramienta comunitaria de orquestación y automatización de despliegue bajo licencia **[MIT](LICENSE)**.
+Este proyecto es una herramienta comunitaria de orquestación bajo licencia **[MIT](LICENSE)**.
 
-* **Descargo sobre n8n:** n8n es una marca registrada de **n8n GmbH**. La imagen oficial de n8n se descarga directamente desde sus repositorios oficiales y su uso está regido por la [Sustainable Use License de n8n](https://docs.n8n.io/sustainable-use-license/). Este repositorio no modifica, redistribuye ni comercializa el código fuente ni los binarios de n8n, ni cuenta con patrocinio o afiliación oficial con n8n GmbH.
-* **Descargo sobre Docker y Cloudflare:** Las marcas Docker y Cloudflare pertenecen a sus respectivos titulares. Todos los derechos reservados a sus autores originales.
-
+* **n8n** es una marca registrada de **n8n GmbH**. El uso de n8n está regido por su [Sustainable Use License](https://docs.n8n.io/sustainable-use-license/). Este repositorio no modifica, redistribuye ni comercializa el código fuente ni los binarios de n8n, ni cuenta con patrocinio o afiliación oficial con n8n GmbH.
+* **Docker** y **Cloudflare** son marcas registradas de sus respectivos titulares.
