@@ -49,35 +49,62 @@ foreach ($line in $envContent) {
 }
 
 # ------------------------------------------------------------------------------
-# 2. DETECCIÓN E INSTALACIÓN DE DOCKER DESKTOP
+# 2. DETECCIÓN DINÁMICA DE DOCKER DESKTOP
 # ------------------------------------------------------------------------------
-$dockerCmd = Get-Command "docker" -ErrorAction SilentlyContinue
+$searchPaths = @(
+    "$env:LOCALAPPDATA\Programs\DockerDesktop\Docker Desktop.exe",
+    "$env:ProgramFiles\Docker\Docker\Docker Desktop.exe",
+    "${env:ProgramFiles(x86)}\Docker\Docker\Docker Desktop.exe",
+    "C:\Program Files\Docker\Docker\Docker Desktop.exe"
+)
 
-if (-not $dockerCmd) {
-    Write-Host "`n[ALERTA] Docker no esta instalado o no se encuentra en el PATH." -ForegroundColor Yellow
-    Write-Host "Opciones de instalacion:" -ForegroundColor Cyan
-    Write-Host "  1. Abrir pagina oficial de descarga (Recomendado)"
-    Write-Host "  2. Instalar automaticamente mediante winget"
-    Write-Host "  3. Salir"
-    
-    $choice = Read-Host "Selecciona una opcion (1/2/3)"
-    switch ($choice) {
-        "1" {
-            Start-Process "https://www.docker.com/products/docker-desktop/"
-            Write-Host "Instala Docker Desktop, reinicia tu equipo y vuelve a ejecutar este script." -ForegroundColor Yellow
-            exit 0
-        }
-        "2" {
-            Write-Host "Ejecutando: winget install Docker.DockerDesktop..." -ForegroundColor Cyan
-            winget install Docker.DockerDesktop
-            Write-Host "Instalacion finalizada. Por favor reinicia tu equipo para aplicar los cambios de virtualizacion." -ForegroundColor Yellow
-            exit 0
-        }
-        default {
-            Write-Host "Operacion cancelada." -ForegroundColor Red
-            exit 1
+$dockerExe = $null
+foreach ($p in $searchPaths) {
+    if (Test-Path $p) {
+        $dockerExe = $p
+        break
+    }
+}
+
+# Si no está en las rutas fijas, buscar en accesos directos o registro
+if (-not $dockerExe) {
+    $shortcuts = @(
+        "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Docker Desktop.lnk",
+        "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\Docker Desktop.lnk"
+    )
+    foreach ($s in $shortcuts) {
+        if (Test-Path $s) {
+            try {
+                $sh = New-Object -ComObject WScript.Shell
+                $target = $sh.CreateShortcut($s).TargetPath
+                if ($target -and (Test-Path $target)) {
+                    $dockerExe = $target
+                    break
+                }
+            } catch {}
         }
     }
+}
+
+# Si docker CLI no está en el PATH pero el ejecutable existe, agregarlo a la sesión actual
+if ($dockerExe) {
+    $dockerBin = Split-Path -Path $dockerExe
+    $resourcesBin = Join-Path $dockerBin "resources\bin"
+    if (Test-Path $resourcesBin) {
+        $env:PATH = "$resourcesBin;$dockerBin;$env:PATH"
+    } else {
+        $env:PATH = "$dockerBin;$env:PATH"
+    }
+}
+
+$dockerCmd = Get-Command "docker" -ErrorAction SilentlyContinue
+
+if (-not $dockerCmd -and -not $dockerExe) {
+    Write-Host "`n[ALERTA] No se detecto ninguna instalacion de Docker Desktop en el equipo." -ForegroundColor Yellow
+    Write-Host "Abriendo sitio oficial de descarga directa..." -ForegroundColor Cyan
+    Start-Process "https://www.docker.com/products/docker-desktop/"
+    Write-Host "Instala Docker Desktop, reinicia tu equipo y vuelve a ejecutar este script." -ForegroundColor Yellow
+    exit 0
 }
 
 # ------------------------------------------------------------------------------
@@ -92,26 +119,15 @@ try {
 }
 
 if (-not $dockerReady) {
-    Write-Host "[INFO] Docker Desktop no esta activo. Localizando ejecutable..." -ForegroundColor Yellow
+    Write-Host "[INFO] Docker Desktop no esta activo. Iniciando servicio..." -ForegroundColor Yellow
     
-    $searchPaths = @(
-        "$env:LOCALAPPDATA\Programs\DockerDesktop\Docker Desktop.exe",
-        "$env:ProgramFiles\Docker\Docker\Docker Desktop.exe",
-        "${env:ProgramFiles(x86)}\Docker\Docker\Docker Desktop.exe"
-    )
-
-    $dockerExe = $null
-    foreach ($p in $searchPaths) {
-        if (Test-Path $p) {
-            $dockerExe = $p
-            break
-        }
-    }
-
     if ($dockerExe) {
         Write-Host "[INFO] Iniciando Docker Desktop desde: $dockerExe" -ForegroundColor Cyan
-        # Ejecutar de forma desacoplada para evitar cierre involuntario
-        $null = wmic process call create "`"$dockerExe`""
+        try {
+            $null = wmic process call create "`"$dockerExe`""
+        } catch {
+            Start-Process -FilePath $dockerExe
+        }
         
         Write-Host "[INFO] Esperando a que el motor de Docker responda..." -NoNewline -ForegroundColor Yellow
         $timeout = 90
