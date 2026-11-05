@@ -7,14 +7,6 @@ param(
 $ErrorActionPreference = "Stop"
 Set-Location -Path $PSScriptRoot
 
-if (-not (Test-Path ".env")) {
-    if (Test-Path ".env.example") {
-        Copy-Item ".env.example" ".env"
-    }
-}
-if (-not (Test-Path "local-files")) { New-Item -ItemType Directory -Path "local-files" -Force | Out-Null }
-if (-not (Test-Path "data")) { New-Item -ItemType Directory -Path "data" -Force | Out-Null }
-
 function Get-EnvVar([string]$key, [string]$default = "") {
     if (Test-Path ".env") {
         foreach ($line in (Get-Content ".env")) {
@@ -43,16 +35,83 @@ function Set-EnvFileVar([string]$key, [string]$val) {
     }
 }
 
+function Initialize-Environment {
+    if (-not (Test-Path ".env")) {
+        if (Test-Path ".env.example") {
+            Copy-Item ".env.example" ".env"
+        } else {
+            New-Item -ItemType File -Path ".env" -Force | Out-Null
+        }
+    }
+    if (-not (Test-Path "local-files")) { New-Item -ItemType Directory -Path "local-files" -Force | Out-Null }
+    if (-not (Test-Path "data")) { New-Item -ItemType Directory -Path "data" -Force | Out-Null }
+
+    $userFolder = Get-EnvVar "N8N_USER_FOLDER" ""
+    if (-not $userFolder) {
+        Set-EnvFileVar "N8N_USER_FOLDER" "./data"
+    }
+
+    $perm = Get-EnvVar "N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS" ""
+    if ($perm -ne "false") {
+        Set-EnvFileVar "N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS" "false"
+    }
+
+    $encKey = Get-EnvVar "N8N_ENCRYPTION_KEY" ""
+    $configPath = Join-Path $PSScriptRoot "data\config"
+    if (-not $encKey) {
+        if (Test-Path $configPath) {
+            try {
+                $cfgJson = Get-Content $configPath -Raw | ConvertFrom-Json
+                if ($cfgJson.encryptionKey) {
+                    $encKey = $cfgJson.encryptionKey
+                    Set-EnvFileVar "N8N_ENCRYPTION_KEY" $encKey
+                }
+            } catch {}
+        }
+        if (-not $encKey) {
+            $bytes = New-Object byte[] 32
+            [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+            $encKey = ($bytes | ForEach-Object { $_.ToString("x2") }) -join ""
+            Set-EnvFileVar "N8N_ENCRYPTION_KEY" $encKey
+        }
+    }
+
+    $dataDb = Join-Path $PSScriptRoot "data\database.sqlite"
+    $homeDb = Join-Path $env:USERPROFILE ".n8n\database.sqlite"
+    if (-not (Test-Path $dataDb) -and (Test-Path $homeDb)) {
+        Write-Host "[*] Detectada configuracion previa en $env:USERPROFILE\.n8n. Migrando datos a data/..." -ForegroundColor Cyan
+        Copy-Item "$env:USERPROFILE\.n8n\*" -Destination (Join-Path $PSScriptRoot "data") -Recurse -Force -ErrorAction SilentlyContinue
+        Write-Host "[OK] Datos previos migrados a data/ exitosamente." -ForegroundColor Green
+    }
+}
+
 function Load-EnvToProcess {
     if (Test-Path ".env") {
         Get-Content ".env" | ForEach-Object {
             $line = $_.Trim()
             if ($line -and -not $line.StartsWith("#") -and $line.Contains("=")) {
                 $parts = $line.Split("=", 2)
-                [Environment]::SetEnvironmentVariable($parts[0].Trim(), $parts[1].Trim(), "Process")
+                $k = $parts[0].Trim()
+                $v = $parts[1].Trim().Trim('"').Trim("'")
+                [Environment]::SetEnvironmentVariable($k, $v, "Process")
+                Set-Item "env:$k" $v
             }
         }
     }
+
+    $userFolder = [Environment]::GetEnvironmentVariable("N8N_USER_FOLDER")
+    if (-not $userFolder -or $userFolder -eq "./data" -or $userFolder -eq "data") {
+        $userFolder = Join-Path $PSScriptRoot "data"
+    } elseif ($userFolder.StartsWith(".")) {
+        $userFolder = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot $userFolder))
+    }
+    [Environment]::SetEnvironmentVariable("N8N_USER_FOLDER", $userFolder, "Process")
+    $env:N8N_USER_FOLDER = $userFolder
+
+    $env:N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS = "false"
+    [Environment]::SetEnvironmentVariable("N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS", "false", "Process")
+    $env:N8N_SSRF_PROTECTION_ENABLED = "false"
+    [Environment]::SetEnvironmentVariable("N8N_SSRF_PROTECTION_ENABLED", "false", "Process")
 }
 
 function Get-DockerExecutable {
@@ -61,8 +120,7 @@ function Get-DockerExecutable {
     $paths = @(
         "$env:LOCALAPPDATA\Programs\DockerDesktop\Docker Desktop.exe",
         "$env:ProgramFiles\Docker\Docker\Docker Desktop.exe",
-        "${env:ProgramFiles(x86)}\Docker\Docker\Docker Desktop.exe",
-        "C:\Program Files\Docker\Docker\Docker Desktop.exe"
+        "${env:ProgramFiles(x86)}\Docker\Docker\Docker Desktop.exe"
     )
     foreach ($p in $paths) {
         if (Test-Path $p) { return $p }
@@ -81,6 +139,29 @@ function Get-NodeExecutable {
     foreach ($p in $paths) {
         if (Test-Path $p) { return $p }
     }
+    return $null
+}
+
+function Get-N8nExecutable {
+    $cmd = (Get-Command "n8n.cmd" -ErrorAction SilentlyContinue).Source
+    if ($cmd -and (Test-Path $cmd) -and $cmd -notmatch [regex]::Escape($PSScriptRoot)) { return $cmd }
+    
+    $paths = @(
+        "$env:APPDATA\npm\n8n.cmd",
+        "$env:ProgramFiles\nodejs\n8n.cmd",
+        "${env:ProgramFiles(x86)}\nodejs\n8n.cmd",
+        "$env:LOCALAPPDATA\Programs\nodejs\n8n.cmd"
+    )
+    foreach ($p in $paths) {
+        if (Test-Path $p) { return $p }
+    }
+    try {
+        $npmPrefix = (& npm.cmd config get prefix 2>$null)
+        if ($npmPrefix) {
+            $p = Join-Path $npmPrefix.Trim() "n8n.cmd"
+            if (Test-Path $p) { return $p }
+        }
+    } catch {}
     return $null
 }
 
@@ -113,15 +194,25 @@ function Start-CloudflareTunnel([string]$localPort) {
     if (-not $cfExe) {
         $cfExe = Install-Cloudflared
     }
+
+    Stop-Process -Name "cloudflared" -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Milliseconds 300
+
     $logFile = "$PSScriptRoot\.cloudflare.log"
-    if (Test-Path $logFile) { Remove-Item $logFile -Force }
+    if (Test-Path $logFile) {
+        try {
+            Remove-Item $logFile -Force -ErrorAction Stop
+        } catch {
+            try { Clear-Content $logFile -Force -ErrorAction SilentlyContinue } catch {}
+        }
+    }
     
     Write-Host "[*] Levantando Cloudflare Quick Tunnel..." -ForegroundColor Cyan
-    $cfCmdLine = "`"$cfExe`" --logfile `"$logFile`" tunnel --url http://localhost:$localPort"
+    $cfCmdLine = "`"$cfExe`" --logfile `"$logFile`" tunnel --url http://127.0.0.1:$localPort"
     try {
-        $null = wmic process call create $cfCmdLine
+        $null = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{CommandLine = $cfCmdLine}
     } catch {
-        Start-Process -FilePath $cfExe -ArgumentList "--logfile `"$logFile`" tunnel --url http://localhost:$localPort" -WindowStyle Hidden
+        Start-Process -FilePath $cfExe -ArgumentList "--logfile `"$logFile`" tunnel --url http://127.0.0.1:$localPort" -WindowStyle Hidden
     }
     
     $timeout = 25
@@ -142,7 +233,7 @@ function Start-CloudflareTunnel([string]$localPort) {
     Write-Host ""
     if ($tunnelUrl) {
         $tunnelUrl = "$tunnelUrl/"
-        Set-Content -Path "$PSScriptRoot\.cloudflare.url" -Value $tunnelUrl
+        Set-Content -Path "$PSScriptRoot\.cloudflare.url" -Value $tunnelUrl -Encoding utf8
         Write-Host "[OK] URL Publica HTTPS generada: $tunnelUrl" -ForegroundColor Green
         return $tunnelUrl
     } else {
@@ -198,11 +289,16 @@ function Start-DockerMode([bool]$useTunnel) {
         return
     }
 
-    $envPort = Get-EnvVar "N8N_PORT" "5678"
+    Load-EnvToProcess
+    $envPort = [Environment]::GetEnvironmentVariable("N8N_PORT")
+    if (-not $envPort) { $envPort = "5678" }
+
     if ($useTunnel) {
         $tUrl = Start-CloudflareTunnel $envPort
         if ($tUrl) {
             Set-EnvFileVar "WEBHOOK_URL" $tUrl
+            $env:WEBHOOK_URL = $tUrl
+            [Environment]::SetEnvironmentVariable("WEBHOOK_URL", $tUrl, "Process")
         }
     }
 
@@ -220,21 +316,12 @@ function Start-NodeMode([bool]$useTunnel) {
         return
     }
 
-    $nodeVer = (& $nodeExe -v 2>$null)
-    if ($nodeVer -match "^v(\d+)\.") {
-        $major = [int]$matches[1]
-        if ($major -gt 24) {
-            Write-Host "`n[ALERTA] Se detecto Node.js $nodeVer." -ForegroundColor Yellow
-            Write-Host "n8n en Windows funciona de forma optima con Node.js v20 o v24 LTS (tienen binarios precompilados)." -ForegroundColor Yellow
-        }
-    }
-
-    $n8nCmd = Get-Command "n8n" -ErrorAction SilentlyContinue
-    if (-not $n8nCmd) {
+    $n8nBin = Get-N8nExecutable
+    if (-not $n8nBin) {
         Write-Host "[*] Instalando n8n globalmente con npm..." -ForegroundColor Cyan
-        cmd.exe /c "npm install -g n8n --legacy-peer-deps --omit=optional"
-        $n8nCmd = Get-Command "n8n" -ErrorAction SilentlyContinue
-        if (-not $n8nCmd) {
+        cmd.exe /c "npm.cmd install -g n8n --legacy-peer-deps --omit=optional"
+        $n8nBin = Get-N8nExecutable
+        if (-not $n8nBin) {
             Write-Host "[ERROR] No se pudo encontrar n8n tras la instalacion." -ForegroundColor Red
             return
         }
@@ -244,21 +331,18 @@ function Start-NodeMode([bool]$useTunnel) {
     $envPort = [Environment]::GetEnvironmentVariable("N8N_PORT")
     if (-not $envPort) { $envPort = "5678" }
 
-    $env:N8N_USER_FOLDER = Join-Path $PSScriptRoot "data"
-    $env:N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS = "true"
-    $env:N8N_SSRF_PROTECTION_ENABLED = "false"
-
     if ($useTunnel) {
         $tUrl = Start-CloudflareTunnel $envPort
         if ($tUrl) {
             $env:WEBHOOK_URL = $tUrl
             Set-EnvFileVar "WEBHOOK_URL" $tUrl
+            [Environment]::SetEnvironmentVariable("WEBHOOK_URL", $tUrl, "Process")
         }
     }
 
     Write-Host "[*] Iniciando n8n Server nativo..." -ForegroundColor Cyan
-    $n8nScript = "title n8n Server (Node.js) && n8n start"
-    Start-Process cmd.exe -ArgumentList "/c $n8nScript"
+    $n8nCmdLine = "title n8n Server (Node.js) && `"$n8nBin`" start"
+    Start-Process cmd.exe -ArgumentList "/c `"$n8nCmdLine`"" -WorkingDirectory $PSScriptRoot
 
     Write-Host "[*] Esperando a que n8n responda..." -NoNewline -ForegroundColor Yellow
     $ready = $false
@@ -266,7 +350,7 @@ function Start-NodeMode([bool]$useTunnel) {
         Start-Sleep -Seconds 1
         Write-Host "." -NoNewline
         try {
-            $curlOut = (& curl.exe -s "http://localhost:$envPort/healthz" 2>$null)
+            $curlOut = (& curl.exe -s "http://127.0.0.1:$envPort/healthz" 2>$null)
             if ($curlOut -match '"status":"ok"') { $ready = $true; break }
         } catch {}
     }
@@ -286,15 +370,24 @@ function Stop-AllServices {
     }
     Stop-Process -Name "cloudflared" -Force -ErrorAction SilentlyContinue
     
-    Get-Process -Name "node" -ErrorAction SilentlyContinue | ForEach-Object {
-        try {
-            if ($_.MainWindowTitle -match "n8n") { Stop-Process -Id $_.Id -Force }
-        } catch {}
+    $port = Get-EnvVar "N8N_PORT" "5678"
+    $listeningPids = (Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique)
+    foreach ($p in $listeningPids) {
+        try { Stop-Process -Id $p -Force -ErrorAction SilentlyContinue } catch {}
+    }
+
+    Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" -ErrorAction SilentlyContinue | ForEach-Object {
+        if ($_.CommandLine -match "n8n") {
+            try { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue } catch {}
+        }
     }
     taskkill /F /FI "WINDOWTITLE eq n8n Server*" 2>$null | Out-Null
     
-    if (Test-Path "$PSScriptRoot\.cloudflare.url") { Remove-Item "$PSScriptRoot\.cloudflare.url" -Force }
-    if (Test-Path "$PSScriptRoot\.cloudflare.log") { Remove-Item "$PSScriptRoot\.cloudflare.log" -Force }
+    if (Test-Path "$PSScriptRoot\.cloudflare.url") { Remove-Item "$PSScriptRoot\.cloudflare.url" -Force -ErrorAction SilentlyContinue }
+    if (Test-Path "$PSScriptRoot\.cloudflare.log") {
+        try { Remove-Item "$PSScriptRoot\.cloudflare.log" -Force -ErrorAction Stop }
+        catch { Clear-Content "$PSScriptRoot\.cloudflare.log" -Force -ErrorAction SilentlyContinue }
+    }
     Write-Host "[OK] Todos los servicios han sido detenidos." -ForegroundColor Green
 }
 
@@ -306,12 +399,12 @@ function Show-Status {
     $port = Get-EnvVar "N8N_PORT" "5678"
     $httpOk = $false
     try {
-        $curlOut = (& curl.exe -s "http://localhost:$port/healthz" 2>$null)
+        $curlOut = (& curl.exe -s "http://127.0.0.1:$port/healthz" 2>$null)
         if ($curlOut -match '"status":"ok"') { $httpOk = $true }
     } catch {}
     if (-not $httpOk) {
         try {
-            $r = Invoke-WebRequest -Uri "http://localhost:$port/healthz" -UseBasicParsing -TimeoutSec 2 2>$null
+            $r = Invoke-WebRequest -Uri "http://127.0.0.1:$port/healthz" -UseBasicParsing -TimeoutSec 2 2>$null
             if ($r.StatusCode -eq 200) { $httpOk = $true }
         } catch {}
     }
@@ -361,8 +454,26 @@ function Show-Status {
     } else {
         Write-Host "Motor Docker:  No instalado en el equipo" -ForegroundColor Gray
     }
+
+    $dataDb = Join-Path $PSScriptRoot "data\database.sqlite"
+    $encKey = Get-EnvVar "N8N_ENCRYPTION_KEY" ""
+    Write-Host "----------------------------------------------------------" -ForegroundColor Gray
+    if (Test-Path $dataDb) {
+        $dbSize = [math]::Round(((Get-Item $dataDb).Length / 1KB), 1)
+        Write-Host "Base de Datos: Inicializada ($dataDb - ${dbSize} KB)" -ForegroundColor Green
+    } else {
+        Write-Host "Base de Datos: Pendiente de primer inicio (se creara en data/)" -ForegroundColor Yellow
+    }
+    if ($encKey) {
+        $maskedKey = $encKey.Substring(0, 4) + "..." + $encKey.Substring($encKey.Length - 4)
+        Write-Host "Clave Encript: Persistente en .env ($maskedKey)" -ForegroundColor Green
+    } else {
+        Write-Host "Clave Encript: No definida en .env" -ForegroundColor Yellow
+    }
     Write-Host "==========================================================" -ForegroundColor Cyan
 }
+
+Initialize-Environment
 
 switch ($Action) {
     "docker-local"   { Start-DockerMode $false }
@@ -386,7 +497,7 @@ switch ($Action) {
             Write-Host "==========================================================" -ForegroundColor Cyan
             Write-Host "Entorno detectado:" -ForegroundColor White
             Write-Host "  * Docker:         $(if ($hasDocker) { 'Disponible' } else { 'No instalado' })"
-            Write-Host "  * Virtualización: $(if ($cpuVt) { 'Habilitada' } else { 'Deshabilitada (Usa Node.js)' })"
+            Write-Host "  * Virtualizacion: $(if ($cpuVt) { 'Habilitada' } else { 'Deshabilitada (Usa Node.js)' })"
             Write-Host "  * Node.js:        $(if ($hasNode) { 'Disponible' } else { 'No instalado' })"
             Write-Host "----------------------------------------------------------" -ForegroundColor Gray
             Write-Host "Opciones:" -ForegroundColor White
@@ -399,16 +510,16 @@ switch ($Action) {
             Write-Host "  [0] Salir"
             Write-Host "==========================================================" -ForegroundColor Cyan
             
-            $opt = Read-Host "Selecciona una opción (0-6)"
+            $opt = Read-Host "Selecciona una opcion (0-6)"
             switch ($opt) {
-                "1" { Start-DockerMode $false; Read-Host "`nPresiona Enter para volver al menú..." }
-                "2" { Start-DockerMode $true; Read-Host "`nPresiona Enter para volver al menú..." }
-                "3" { Start-NodeMode $false; Read-Host "`nPresiona Enter para volver al menú..." }
-                "4" { Start-NodeMode $true; Read-Host "`nPresiona Enter para volver al menú..." }
-                "5" { Stop-AllServices; Read-Host "`nPresiona Enter para volver al menú..." }
-                "6" { Show-Status; Read-Host "`nPresiona Enter para volver al menú..." }
+                "1" { Start-DockerMode $false; Read-Host "`nPresiona Enter para volver al menu..." }
+                "2" { Start-DockerMode $true; Read-Host "`nPresiona Enter para volver al menu..." }
+                "3" { Start-NodeMode $false; Read-Host "`nPresiona Enter para volver al menu..." }
+                "4" { Start-NodeMode $true; Read-Host "`nPresiona Enter para volver al menu..." }
+                "5" { Stop-AllServices; Read-Host "`nPresiona Enter para volver al menu..." }
+                "6" { Show-Status; Read-Host "`nPresiona Enter para volver al menu..." }
                 "0" { Write-Host "Saliendo..."; exit 0 }
-                default { Write-Host "Opción no válida."; Start-Sleep -Seconds 1 }
+                default { Write-Host "Opcion no valida."; Start-Sleep -Seconds 1 }
             }
         }
     }

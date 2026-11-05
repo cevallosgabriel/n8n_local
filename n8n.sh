@@ -8,8 +8,27 @@ ACTION="${1:-menu}"
 mkdir -p local-files data
 
 get_env() {
-    grep -E "^\s*$1=" .env | cut -d '=' -f2 | tr -d ' ' || echo "$2"
+    grep -E "^\s*$1=" .env 2>/dev/null | cut -d '=' -f2 | tr -d ' ' | tr -d '"' | tr -d "'" || echo "$2"
 }
+
+set_env() {
+    local key="$1"
+    local val="$2"
+    if grep -qE "^\s*#?\s*$key=" .env; then
+        sed -i "s|^\s*#\?\s*$key=.*|$key=$val|" .env
+    else
+        echo "$key=$val" >> .env
+    fi
+}
+
+# Ensure persistent key and safe permissions
+[ -z "$(get_env "N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS" "")" ] && set_env "N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS" "false"
+[ -z "$(get_env "N8N_USER_FOLDER" "")" ] && set_env "N8N_USER_FOLDER" "./data"
+ENC_KEY=$(get_env "N8N_ENCRYPTION_KEY" "")
+if [ -z "$ENC_KEY" ]; then
+    NEW_KEY=$(openssl rand -hex 32 2>/dev/null || od -vN 32 -An -tx1 /dev/urandom | tr -d ' \n')
+    [ -n "$NEW_KEY" ] && set_env "N8N_ENCRYPTION_KEY" "$NEW_KEY"
+fi
 
 PORT=$(get_env "N8N_PORT" "5678")
 PORT=${PORT:-5678}
@@ -18,16 +37,18 @@ start_docker() {
     USE_TUNNEL=$1
     if ! command -v docker &> /dev/null; then
         echo "[ERROR] Docker no está instalado."
-        exit 1
+        return
     fi
     if [ "$USE_TUNNEL" = "true" ]; then
         echo "[*] Levantando Cloudflare Quick Tunnel..."
-        nohup cloudflared --logfile .cloudflare.log tunnel --url "http://localhost:$PORT" > /dev/null 2>&1 &
+        pkill -f "cloudflared" 2>/dev/null || true
+        rm -f .cloudflare.log .cloudflare.url
+        nohup cloudflared --logfile .cloudflare.log tunnel --url "http://127.0.0.1:$PORT" > /dev/null 2>&1 &
         sleep 4
-        URL=$(grep -oE "https://[a-zA-Z0-9-]+\.trycloudflare\.com" .cloudflare.log | head -n 1)
+        URL=$(grep -oE "https://[a-zA-Z0-9-]+\.trycloudflare\.com" .cloudflare.log 2>/dev/null | head -n 1)
         if [ -n "$URL" ]; then
             echo "$URL/" > .cloudflare.url
-            sed -i "s|^#\?WEBHOOK_URL=.*|WEBHOOK_URL=$URL/|" .env
+            set_env "WEBHOOK_URL" "$URL/"
             echo "[OK] URL Pública: $URL/"
         fi
     fi
@@ -39,7 +60,7 @@ start_node() {
     USE_TUNNEL=$1
     if ! command -v node &> /dev/null; then
         echo "[ERROR] Node.js no está instalado."
-        exit 1
+        return
     fi
     if ! command -v n8n &> /dev/null; then
         echo "[*] Instalando n8n globalmente..."
@@ -48,14 +69,22 @@ start_node() {
     export N8N_USER_FOLDER="$(pwd)/data"
     export N8N_PORT="$PORT"
     export N8N_SSRF_PROTECTION_ENABLED="false"
+    export N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS="false"
+    
+    ENC=$(get_env "N8N_ENCRYPTION_KEY" "")
+    [ -n "$ENC" ] && export N8N_ENCRYPTION_KEY="$ENC"
+
     if [ "$USE_TUNNEL" = "true" ]; then
         echo "[*] Levantando Cloudflare Quick Tunnel..."
-        nohup cloudflared --logfile .cloudflare.log tunnel --url "http://localhost:$PORT" > /dev/null 2>&1 &
+        pkill -f "cloudflared" 2>/dev/null || true
+        rm -f .cloudflare.log .cloudflare.url
+        nohup cloudflared --logfile .cloudflare.log tunnel --url "http://127.0.0.1:$PORT" > /dev/null 2>&1 &
         sleep 4
-        URL=$(grep -oE "https://[a-zA-Z0-9-]+\.trycloudflare\.com" .cloudflare.log | head -n 1)
+        URL=$(grep -oE "https://[a-zA-Z0-9-]+\.trycloudflare\.com" .cloudflare.log 2>/dev/null | head -n 1)
         if [ -n "$URL" ]; then
             echo "$URL/" > .cloudflare.url
             export WEBHOOK_URL="$URL/"
+            set_env "WEBHOOK_URL" "$URL/"
             echo "[OK] URL Pública: $URL/"
         fi
     fi
@@ -76,7 +105,7 @@ show_status() {
     echo "=========================================="
     echo "            Estado del Sistema            "
     echo "=========================================="
-    if curl -s -o /dev/null -w "%{http_code}" "http://localhost:$PORT" | grep -q "200"; then
+    if curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:$PORT/healthz" | grep -q "200"; then
         echo "Local:   http://localhost:$PORT -> EN LÍNEA (200 OK)"
     else
         echo "Local:   http://localhost:$PORT -> DETENIDO"
@@ -97,27 +126,30 @@ case "$ACTION" in
     stop)           stop_all ;;
     status)         show_status ;;
     menu|*)
-        clear
-        echo "=========================================="
-        echo "        n8n Unified Stack Manager         "
-        echo "=========================================="
-        echo "  [1] Docker  - Localhost"
-        echo "  [2] Docker  - Cloudflare Tunnel"
-        echo "  [3] Node.js - Localhost (Ligero, 8GB RAM)"
-        echo "  [4] Node.js - Cloudflare Tunnel"
-        echo "  [5] Detener todos los servicios"
-        echo "  [6] Ver estado"
-        echo "  [0] Salir"
-        echo "=========================================="
-        read -p "Opción: " opt
-        case "$opt" in
-            1) start_docker false ;;
-            2) start_docker true ;;
-            3) start_node false ;;
-            4) start_node true ;;
-            5) stop_all ;;
-            6) show_status ;;
-            *) exit 0 ;;
-        esac
+        while true; do
+            clear
+            echo "=========================================="
+            echo "        n8n Unified Stack Manager         "
+            echo "=========================================="
+            echo "  [1] Docker  - Localhost"
+            echo "  [2] Docker  - Cloudflare Tunnel"
+            echo "  [3] Node.js - Localhost (Ligero, 8GB RAM)"
+            echo "  [4] Node.js - Cloudflare Tunnel"
+            echo "  [5] Detener todos los servicios"
+            echo "  [6] Ver estado"
+            echo "  [0] Salir"
+            echo "=========================================="
+            read -p "Opción: " opt
+            case "$opt" in
+                1) start_docker false; read -p "Presiona Enter para volver...";;
+                2) start_docker true; read -p "Presiona Enter para volver...";;
+                3) start_node false; read -p "Presiona Enter para volver...";;
+                4) start_node true; read -p "Presiona Enter para volver...";;
+                5) stop_all; read -p "Presiona Enter para volver...";;
+                6) show_status; read -p "Presiona Enter para volver...";;
+                0) exit 0;;
+                *) echo "Opción no válida."; sleep 1;;
+            esac
+        done
         ;;
 esac
