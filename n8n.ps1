@@ -243,8 +243,8 @@ function Start-NodeMode([bool]$useTunnel) {
         Start-Sleep -Seconds 1
         Write-Host "." -NoNewline
         try {
-            $res = Invoke-WebRequest -Uri "http://localhost:$envPort" -UseBasicParsing -TimeoutSec 2 2>$null
-            if ($res.StatusCode -eq 200) { $ready = $true; break }
+            $curlOut = (& curl.exe -s "http://localhost:$envPort/healthz" 2>$null)
+            if ($curlOut -match '"status":"ok"') { $ready = $true; break }
         } catch {}
     }
     Write-Host ""
@@ -277,9 +277,15 @@ function Show-Status {
     $port = Get-EnvVar "N8N_PORT" "5678"
     $httpOk = $false
     try {
-        $r = Invoke-WebRequest -Uri "http://localhost:$port" -UseBasicParsing -TimeoutSec 2 2>$null
-        if ($r.StatusCode -eq 200) { $httpOk = $true }
+        $curlOut = (& curl.exe -s "http://localhost:$port/healthz" 2>$null)
+        if ($curlOut -match '"status":"ok"') { $httpOk = $true }
     } catch {}
+    if (-not $httpOk) {
+        try {
+            $r = Invoke-WebRequest -Uri "http://localhost:$port/healthz" -UseBasicParsing -TimeoutSec 2 2>$null
+            if ($r.StatusCode -eq 200) { $httpOk = $true }
+        } catch {}
+    }
 
     $statusMsg = if ($httpOk) { "EN LINEA (200 OK)" } else { "DETENIDO" }
     Write-Host "Panel Local:   http://localhost:$port -> $statusMsg"
