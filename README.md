@@ -15,7 +15,7 @@ Entorno de automatización local basado en **n8n Community Edition (Gratis)**. L
 | :--- | :--- | :--- |
 | **Memoria RAM** | **8 GB** | **16 GB o más** |
 | **CPU** | 2 núcleos | 4 núcleos |
-| **Almacenamiento** | 5 GB de espacio libre | SSD recomendado |
+| **Almacenamiento** | 5 GB libres | 10 GB o más |
 
 > ⚠️ **Advertencia de rendimiento:**
 > * Equipos con **menos de 8 GB de RAM** experimentarán fallos de memoria, lentitud extrema o cierres inesperados al utilizar Docker.
@@ -97,3 +97,13 @@ Para conectar n8n con bases de datos o servicios que corren en la máquina anfit
 
 * El archivo `.env`, historiales de flujos y datos locales están ignorados en `.gitignore` para prevenir filtraciones accidentales.
 * Usa siempre `.env.example` como plantilla base al compartir o clonar el proyecto.
+
+---
+
+## 📄 Licencia y Descargo Legal
+
+Este proyecto es una herramienta comunitaria de orquestación y automatización de despliegue bajo licencia **[MIT](LICENSE)**.
+
+* **Descargo sobre n8n:** n8n es una marca registrada de **n8n GmbH**. La imagen oficial de n8n se descarga directamente desde sus repositorios oficiales y su uso está regido por la [Sustainable Use License de n8n](https://docs.n8n.io/sustainable-use-license/). Este repositorio no modifica, redistribuye ni comercializa el código fuente ni los binarios de n8n, ni cuenta con patrocinio o afiliación oficial con n8n GmbH.
+* **Descargo sobre Docker y Cloudflare:** Las marcas Docker y Cloudflare pertenecen a sus respectivos titulares. Todos los derechos reservados a sus autores originales.
+
