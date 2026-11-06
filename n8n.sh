@@ -74,6 +74,7 @@ start_docker() {
         if [ -n "$URL" ]; then
             echo "$URL/" > .cloudflare.url
             set_env "WEBHOOK_URL" "$URL/"
+            set_env "N8N_WEBHOOK_URL" "$URL/"
             echo "[OK] URL Pública: $URL/"
         fi
     fi
@@ -95,6 +96,7 @@ start_node() {
     export N8N_PORT="$PORT"
     export N8N_SSRF_PROTECTION_ENABLED="false"
     export N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS="false"
+    export N8N_PROXY_HOPS="1"
     
     ENC=$(get_env "N8N_ENCRYPTION_KEY" "")
     [ -n "$ENC" ] && export N8N_ENCRYPTION_KEY="$ENC"
@@ -109,7 +111,9 @@ start_node() {
         if [ -n "$URL" ]; then
             echo "$URL/" > .cloudflare.url
             export WEBHOOK_URL="$URL/"
+            export N8N_WEBHOOK_URL="$URL/"
             set_env "WEBHOOK_URL" "$URL/"
+            set_env "N8N_WEBHOOK_URL" "$URL/"
             echo "[OK] URL Pública: $URL/"
         fi
     fi
@@ -130,15 +134,33 @@ show_status() {
     echo "=========================================="
     echo "            Estado del Sistema            "
     echo "=========================================="
-    if curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:$PORT/healthz" | grep -q "200"; then
-        echo "Local:   http://localhost:$PORT -> EN LÍNEA (200 OK)"
+    
+    local is_net_up=false
+    if nc -z -w 1 1.1.1.1 443 2>/dev/null || curl -s --connect-timeout 1 -I https://1.1.1.1 >/dev/null 2>&1; then
+        is_net_up=true
+        echo "Conexión: CONECTADO (Internet OK)"
     else
-        echo "Local:   http://localhost:$PORT -> DETENIDO"
+        echo "Conexión: DESCONECTADO (Sin acceso a Internet)"
     fi
-    if [ -f ".cloudflare.url" ]; then
-        echo "Túnel:   $(cat .cloudflare.url) (Activo)"
+
+    if curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:$PORT/healthz" | grep -q "200"; then
+        echo "Local:    http://localhost:$PORT -> EN LÍNEA (200 OK)"
     else
-        echo "Túnel:   Inactivo"
+        echo "Local:    http://localhost:$PORT -> DETENIDO"
+    fi
+
+    if [ -f ".cloudflare.url" ] && pgrep -f "cloudflared" >/dev/null 2>&1; then
+        local url
+        url=$(cat .cloudflare.url)
+        if [ "$is_net_up" = "false" ]; then
+            echo "Túnel:    $url -> DESCONECTADO (Sin Internet)"
+        elif curl -s --connect-timeout 2 --max-time 3 "$url/healthz" 2>/dev/null | grep -q '"status":"ok"'; then
+            echo "Túnel:    $url -> EN LÍNEA (Accesible)"
+        else
+            echo "Túnel:    $url -> RECONECTANDO..."
+        fi
+    else
+        echo "Túnel:    Inactivo"
     fi
     echo "=========================================="
 }

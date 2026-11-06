@@ -136,6 +136,12 @@ function Load-EnvToProcess {
     [Environment]::SetEnvironmentVariable("N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS", "false", "Process")
     $env:N8N_SSRF_PROTECTION_ENABLED = "false"
     [Environment]::SetEnvironmentVariable("N8N_SSRF_PROTECTION_ENABLED", "false", "Process")
+
+    $proxyHops = [Environment]::GetEnvironmentVariable("N8N_PROXY_HOPS")
+    if (-not $proxyHops) {
+        $env:N8N_PROXY_HOPS = "1"
+        [Environment]::SetEnvironmentVariable("N8N_PROXY_HOPS", "1", "Process")
+    }
 }
 
 function Get-DockerExecutable {
@@ -321,8 +327,11 @@ function Start-DockerMode([bool]$useTunnel) {
         $tUrl = Start-CloudflareTunnel $envPort
         if ($tUrl) {
             Set-EnvFileVar "WEBHOOK_URL" $tUrl
+            Set-EnvFileVar "N8N_WEBHOOK_URL" $tUrl
             $env:WEBHOOK_URL = $tUrl
+            $env:N8N_WEBHOOK_URL = $tUrl
             [Environment]::SetEnvironmentVariable("WEBHOOK_URL", $tUrl, "Process")
+            [Environment]::SetEnvironmentVariable("N8N_WEBHOOK_URL", $tUrl, "Process")
         }
     }
 
@@ -359,8 +368,11 @@ function Start-NodeMode([bool]$useTunnel) {
         $tUrl = Start-CloudflareTunnel $envPort
         if ($tUrl) {
             $env:WEBHOOK_URL = $tUrl
+            $env:N8N_WEBHOOK_URL = $tUrl
             Set-EnvFileVar "WEBHOOK_URL" $tUrl
+            Set-EnvFileVar "N8N_WEBHOOK_URL" $tUrl
             [Environment]::SetEnvironmentVariable("WEBHOOK_URL", $tUrl, "Process")
+            [Environment]::SetEnvironmentVariable("N8N_WEBHOOK_URL", $tUrl, "Process")
         }
     }
 
@@ -417,11 +429,33 @@ function Stop-AllServices {
     Write-Host "[OK] Todos los servicios han sido detenidos." -ForegroundColor Green
 }
 
+function Test-InternetConnection([int]$timeoutMs = 1200) {
+    try {
+        $client = New-Object System.Net.Sockets.TcpClient
+        $iar = $client.BeginConnect("1.1.1.1", 443, $null, $null)
+        $ok = $iar.AsyncWaitHandle.WaitOne($timeoutMs)
+        if ($ok -and $client.Connected) {
+            $client.EndConnect($iar)
+            $client.Close()
+            return $true
+        }
+        $client.Close()
+    } catch {}
+    return $false
+}
+
 function Show-Status {
     Write-Host "==========================================================" -ForegroundColor Cyan
     Write-Host "                  Estado del Sistema                      " -ForegroundColor Cyan
     Write-Host "==========================================================" -ForegroundColor Cyan
     
+    $isInternetUp = Test-InternetConnection
+    if ($isInternetUp) {
+        Write-Host "Conexion Red:  CONECTADO (Internet OK)" -ForegroundColor Green
+    } else {
+        Write-Host "Conexion Red:  DESCONECTADO (Sin acceso a Internet)" -ForegroundColor Red
+    }
+
     $port = Get-EnvVar "N8N_PORT" "5678"
     $httpOk = $false
     try {
@@ -441,7 +475,21 @@ function Show-Status {
     $cfProc = Get-Process -Name "cloudflared" -ErrorAction SilentlyContinue
     if ($cfProc -and (Test-Path "$PSScriptRoot\.cloudflare.url")) {
         $url = (Get-Content "$PSScriptRoot\.cloudflare.url" -Raw).Trim()
-        Write-Host "Tunel Publico: $url (Activo)" -ForegroundColor Green
+        if (-not $isInternetUp) {
+            Write-Host "Tunel Publico: $url -> DESCONECTADO (Sin conexion a Internet)" -ForegroundColor Red
+        } else {
+            $tunnelProbeOk = $false
+            try {
+                $probe = (& curl.exe -s --connect-timeout 2 --max-time 3 "$url/healthz" 2>$null)
+                if ($probe -match '"status":"ok"') { $tunnelProbeOk = $true }
+            } catch {}
+
+            if ($tunnelProbeOk) {
+                Write-Host "Tunel Publico: $url -> EN LINEA (Accesible desde Internet)" -ForegroundColor Green
+            } else {
+                Write-Host "Tunel Publico: $url -> RECONECTANDO (Esperando enlace de Cloudflare...)" -ForegroundColor Yellow
+            }
+        }
     } else {
         Write-Host "Tunel Publico: Inactivo" -ForegroundColor Gray
     }
