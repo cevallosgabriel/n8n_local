@@ -33,6 +33,13 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
+# Runtime de Cloudflare Tunnel
+.cloudflare.url
+.cloudflare.log
+
+# Sub-repositorios y módulos externos
+Whatsapp_to_Webhook/
+
 # Archivos del sistema operativo y editores
 .DS_Store
 Thumbs.db
