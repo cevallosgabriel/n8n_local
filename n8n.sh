@@ -174,14 +174,15 @@ show_status() {
     fi
 
     if [ -f ".cloudflare.url" ] && pgrep -f "cloudflared" >/dev/null 2>&1; then
-        local url
+        local url clean_url
         url=$(cat .cloudflare.url)
+        clean_url="${url%/}"
         if [ "$is_net_up" = "false" ]; then
-            echo "Túnel:    $url -> DESCONECTADO (Sin Internet)"
-        elif curl -s --connect-timeout 2 --max-time 3 "$url/healthz" 2>/dev/null | grep -q '"status":"ok"'; then
-            echo "Túnel:    $url -> EN LÍNEA (Accesible)"
+            echo "Túnel:    $clean_url/ -> DESCONECTADO (Sin Internet)"
+        elif curl -s --connect-timeout 4 --max-time 5 "$clean_url/healthz" 2>/dev/null | grep -q '"status":"ok"'; then
+            echo "Túnel:    $clean_url/ -> EN LÍNEA (Accesible)"
         else
-            echo "Túnel:    $url -> RECONECTANDO..."
+            echo "Túnel:    $clean_url/ -> RECONECTANDO..."
         fi
     else
         echo "Túnel:    Inactivo"

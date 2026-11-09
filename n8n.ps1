@@ -436,7 +436,7 @@ function Start-NodeMode([bool]$useTunnel) {
 
     Write-Host "[*] Esperando a que n8n responda..." -NoNewline -ForegroundColor Yellow
     $ready = $false
-    for ($i = 0; $i -lt 30; $i++) {
+    for ($i = 0; $i -lt 60; $i++) {
         Start-Sleep -Seconds 1
         Write-Host "." -NoNewline
         try {
@@ -527,19 +527,20 @@ function Show-Status {
     $cfProc = Get-Process -Name "cloudflared" -ErrorAction SilentlyContinue
     if ($cfProc -and (Test-Path "$PSScriptRoot\.cloudflare.url")) {
         $url = (Get-Content "$PSScriptRoot\.cloudflare.url" -Raw).Trim()
+        $cleanUrl = $url.TrimEnd('/')
         if (-not $isInternetUp) {
-            Write-Host "Tunel Publico: $url -> DESCONECTADO (Sin conexion a Internet)" -ForegroundColor Red
+            Write-Host "Tunel Publico: $cleanUrl/ -> DESCONECTADO (Sin conexion a Internet)" -ForegroundColor Red
         } else {
             $tunnelProbeOk = $false
             try {
-                $probe = (& curl.exe -s --connect-timeout 2 --max-time 3 "$url/healthz" 2>$null)
+                $probe = (& curl.exe -s --connect-timeout 4 --max-time 5 "$cleanUrl/healthz" 2>$null)
                 if ($probe -match '"status":"ok"') { $tunnelProbeOk = $true }
             } catch {}
 
             if ($tunnelProbeOk) {
-                Write-Host "Tunel Publico: $url -> EN LINEA (Accesible desde Internet)" -ForegroundColor Green
+                Write-Host "Tunel Publico: $cleanUrl/ -> EN LINEA (Accesible desde Internet)" -ForegroundColor Green
             } else {
-                Write-Host "Tunel Publico: $url -> RECONECTANDO (Esperando enlace de Cloudflare...)" -ForegroundColor Yellow
+                Write-Host "Tunel Publico: $cleanUrl/ -> RECONECTANDO (Esperando enlace de Cloudflare...)" -ForegroundColor Yellow
             }
         }
     } else {
