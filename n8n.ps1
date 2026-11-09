@@ -367,6 +367,38 @@ function Start-DockerMode([bool]$useTunnel) {
 }
 
 function Start-NodeMode([bool]$useTunnel) {
+    Load-EnvToProcess
+    $envPort = [Environment]::GetEnvironmentVariable("N8N_PORT")
+    if (-not $envPort) { $envPort = "5678" }
+
+    # Comprobar si n8n ya está activo y respondiendo
+    $isN8nRunning = $false
+    try {
+        $curlCheck = (& curl.exe -s "http://127.0.0.1:$envPort/healthz" 2>$null)
+        if ($curlCheck -match '"status":"ok"') { $isN8nRunning = $true }
+    } catch {}
+
+    if ($isN8nRunning) {
+        Write-Host "[OK] n8n ya se encuentra en ejecucion en el puerto $envPort." -ForegroundColor Green
+        if ($useTunnel) {
+            Write-Host "[*] Reconectando unicamente Cloudflare Quick Tunnel..." -ForegroundColor Cyan
+            $tUrl = Start-CloudflareTunnel $envPort
+            if ($tUrl) {
+                $env:N8N_WEBHOOK_URL = $tUrl
+                Set-EnvFileVar "N8N_WEBHOOK_URL" $tUrl
+                [Environment]::SetEnvironmentVariable("N8N_WEBHOOK_URL", $tUrl, "Process")
+                $env:WEBHOOK_URL = $null
+                [Environment]::SetEnvironmentVariable("WEBHOOK_URL", $null, "Process")
+                Write-Host "[OK] Tunel de Cloudflare reconectado exitosamente sin reiniciar n8n." -ForegroundColor Green
+                Write-Host "[OK] URL Publica: $tUrl" -ForegroundColor Green
+            }
+        } else {
+            Write-Host "[*] Abriendo panel de n8n en el navegador..." -ForegroundColor Cyan
+            Start-Process "http://localhost:$envPort"
+        }
+        return
+    }
+
     $nodeExe = Get-NodeExecutable
     if (-not $nodeExe) {
         Write-Host "`n[ERROR] Node.js no esta instalado en este equipo." -ForegroundColor Red
@@ -384,10 +416,6 @@ function Start-NodeMode([bool]$useTunnel) {
             return
         }
     }
-
-    Load-EnvToProcess
-    $envPort = [Environment]::GetEnvironmentVariable("N8N_PORT")
-    if (-not $envPort) { $envPort = "5678" }
 
     if ($useTunnel) {
         $tUrl = Start-CloudflareTunnel $envPort
@@ -602,7 +630,7 @@ switch ($Action) {
             Write-Host "  [1] Iniciar con Docker (Localhost)"
             Write-Host "  [2] Iniciar con Docker + Cloudflare Tunnel (Webhook Publico)"
             Write-Host "  [3] Iniciar con Node.js (Localhost - Ligero, ideal para 8GB RAM)"
-            Write-Host "  [4] Iniciar con Node.js + Cloudflare Tunnel (Ligero + Webhook)"
+            Write-Host "  [4] Iniciar / Reconectar Node.js + Cloudflare Tunnel (Inteligente)"
             Write-Host "  [5] Detener todos los servicios"
             Write-Host "  [6] Ver estado"
             Write-Host "  [0] Salir"

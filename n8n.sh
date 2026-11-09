@@ -85,6 +85,28 @@ start_docker() {
 
 start_node() {
     USE_TUNNEL=$1
+
+    # Comprobar si n8n ya está activo
+    if curl -s "http://127.0.0.1:$PORT/healthz" 2>/dev/null | grep -q '"status":"ok"'; then
+        echo "[OK] n8n ya se encuentra en ejecución en el puerto $PORT."
+        if [ "$USE_TUNNEL" = "true" ]; then
+            echo "[*] Reconectando únicamente Cloudflare Quick Tunnel..."
+            pkill -f "cloudflared" 2>/dev/null || true
+            rm -f .cloudflare.log .cloudflare.url
+            nohup cloudflared --logfile .cloudflare.log tunnel --url "http://127.0.0.1:$PORT" > /dev/null 2>&1 &
+            sleep 4
+            URL=$(grep -oE "https://[a-zA-Z0-9-]+\.trycloudflare\.com" .cloudflare.log 2>/dev/null | head -n 1)
+            if [ -n "$URL" ]; then
+                echo "$URL/" > .cloudflare.url
+                export N8N_WEBHOOK_URL="$URL/"
+                set_env "N8N_WEBHOOK_URL" "$URL/"
+                echo "[OK] Túnel de Cloudflare reconectado exitosamente sin reiniciar n8n."
+                echo "[OK] URL Pública: $URL/"
+            fi
+        fi
+        return
+    fi
+
     if ! command -v node &> /dev/null; then
         echo "[ERROR] Node.js no está instalado."
         return
