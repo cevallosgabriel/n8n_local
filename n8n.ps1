@@ -1,5 +1,5 @@
 param(
-    [ValidateSet("menu", "docker-local", "docker-tunnel", "node-local", "node-tunnel", "stop", "status")]
+    [ValidateSet("menu", "docker-local", "docker-tunnel", "node-local", "node-tunnel", "reconnect-tunnel", "stop", "status")]
     [string]$Action = "menu",
     [string]$Port = "5678"
 )
@@ -600,15 +600,56 @@ function Show-Status {
     Write-Host "==========================================================" -ForegroundColor Cyan
 }
 
+function Reconnect-Tunnel {
+    Load-EnvToProcess
+    $envPort = [Environment]::GetEnvironmentVariable("N8N_PORT")
+    if (-not $envPort) { $envPort = "5678" }
+
+    Write-Host "`n[*] Verificando si n8n esta en ejecucion en http://127.0.0.1:$envPort..." -ForegroundColor Cyan
+    $n8nRunning = $false
+    try {
+        $check = (& curl.exe -s --connect-timeout 2 "http://127.0.0.1:$envPort/healthz" 2>$null)
+        if ($check -match '"status":"ok"') { $n8nRunning = $true }
+    } catch {}
+
+    if (-not $n8nRunning) {
+        Write-Host "[ERROR] n8n no esta respondiendo en el puerto $envPort." -ForegroundColor Red
+        Write-Host "Inicia primero n8n usando la opcion [3] o [4] antes de reconectar el tunel." -ForegroundColor Yellow
+        return
+    }
+
+    Write-Host "[OK] n8n detectado y respondiendo en el puerto $envPort." -ForegroundColor Green
+    Write-Host "[*] Levantando nuevo Cloudflare Quick Tunnel (sin tocar n8n)..." -ForegroundColor Cyan
+
+    $tUrl = Start-CloudflareTunnel $envPort
+    if ($tUrl) {
+        $env:N8N_WEBHOOK_URL = $tUrl
+        $env:WEBHOOK_URL = $tUrl
+        Set-EnvFileVar "N8N_WEBHOOK_URL" $tUrl
+        Set-EnvFileVar "WEBHOOK_URL" $tUrl
+        [Environment]::SetEnvironmentVariable("N8N_WEBHOOK_URL", $tUrl, "Process")
+        [Environment]::SetEnvironmentVariable("WEBHOOK_URL", $tUrl, "Process")
+
+        Write-Host "`n==========================================================" -ForegroundColor Green
+        Write-Host "  [OK] TUNEL CLOUDFLARE RECONECTADO EXITOSAMENTE" -ForegroundColor Green
+        Write-Host "  Nueva URL Publica : $tUrl" -ForegroundColor Cyan
+        Write-Host "  Estado n8n        : Intacto (sin reinicios)" -ForegroundColor Green
+        Write-Host "==========================================================" -ForegroundColor Green
+    } else {
+        Write-Host "[ERROR] No se pudo obtener enlace del tunel de Cloudflare." -ForegroundColor Red
+    }
+}
+
 Initialize-Environment
 
 switch ($Action) {
-    "docker-local"   { Start-DockerMode $false }
-    "docker-tunnel"  { Start-DockerMode $true }
-    "node-local"     { Start-NodeMode $false }
-    "node-tunnel"    { Start-NodeMode $true }
-    "stop"           { Stop-AllServices }
-    "status"         { Show-Status }
+    "docker-local"      { Start-DockerMode $false }
+    "docker-tunnel"     { Start-DockerMode $true }
+    "node-local"        { Start-NodeMode $false }
+    "node-tunnel"       { Start-NodeMode $true }
+    "reconnect-tunnel"  { Reconnect-Tunnel }
+    "stop"              { Stop-AllServices }
+    "status"            { Show-Status }
     "menu" {
         while ($true) {
             Clear-Host
@@ -631,13 +672,14 @@ switch ($Action) {
             Write-Host "  [1] Iniciar con Docker (Localhost)"
             Write-Host "  [2] Iniciar con Docker + Cloudflare Tunnel (Webhook Publico)"
             Write-Host "  [3] Iniciar con Node.js (Localhost - Ligero, ideal para 8GB RAM)"
-            Write-Host "  [4] Iniciar / Reconectar Node.js + Cloudflare Tunnel (Inteligente)"
+            Write-Host "  [4] Iniciar con Node.js + Cloudflare Tunnel"
             Write-Host "  [5] Detener todos los servicios"
             Write-Host "  [6] Ver estado"
+            Write-Host "  [7] Reconectar Tunel Cloudflare (sin reiniciar n8n)"
             Write-Host "  [0] Salir"
             Write-Host "==========================================================" -ForegroundColor Cyan
             
-            $opt = Read-Host "Selecciona una opcion (0-6)"
+            $opt = Read-Host "Selecciona una opcion (0-7)"
             switch ($opt) {
                 "1" { Start-DockerMode $false; Read-Host "`nPresiona Enter para volver al menu..." }
                 "2" { Start-DockerMode $true; Read-Host "`nPresiona Enter para volver al menu..." }
@@ -645,6 +687,7 @@ switch ($Action) {
                 "4" { Start-NodeMode $true; Read-Host "`nPresiona Enter para volver al menu..." }
                 "5" { Stop-AllServices; Read-Host "`nPresiona Enter para volver al menu..." }
                 "6" { Show-Status; Read-Host "`nPresiona Enter para volver al menu..." }
+                "7" { Reconnect-Tunnel; Read-Host "`nPresiona Enter para volver al menu..." }
                 "0" { Write-Host "Saliendo..."; exit 0 }
                 default { Write-Host "Opcion no valida."; Start-Sleep -Seconds 1 }
             }

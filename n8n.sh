@@ -190,13 +190,46 @@ show_status() {
     echo "=========================================="
 }
 
+reconnect_tunnel() {
+    echo "[*] Verificando si n8n está en ejecución en http://127.0.0.1:$PORT..."
+    if ! curl -s --connect-timeout 2 "http://127.0.0.1:$PORT/healthz" 2>/dev/null | grep -q '"status":"ok"'; then
+        echo "[ERROR] n8n no está respondiendo en el puerto $PORT."
+        echo "Inicia primero n8n usando la opción [3] o [4] antes de reconectar el túnel."
+        return
+    fi
+
+    echo "[OK] n8n detectado y respondiendo en el puerto $PORT."
+    echo "[*] Levantando nuevo Cloudflare Quick Tunnel (sin tocar n8n)..."
+    pkill -f "cloudflared" 2>/dev/null || true
+    rm -f .cloudflare.log .cloudflare.url
+    nohup cloudflared --logfile .cloudflare.log tunnel --url "http://127.0.0.1:$PORT" > /dev/null 2>&1 &
+    sleep 4
+    local url
+    url=$(grep -oE "https://[a-zA-Z0-9-]+\.trycloudflare\.com" .cloudflare.log 2>/dev/null | head -n 1)
+    if [ -n "$url" ]; then
+        echo "$url/" > .cloudflare.url
+        export N8N_WEBHOOK_URL="$url/"
+        export WEBHOOK_URL="$url/"
+        set_env "N8N_WEBHOOK_URL" "$url/"
+        set_env "WEBHOOK_URL" "$url/"
+        echo "=========================================="
+        echo "  [OK] TÚNEL RECONECTADO EXITOSAMENTE"
+        echo "  Nueva URL Pública : $url/"
+        echo "  Estado n8n        : Intacto (sin reinicios)"
+        echo "=========================================="
+    else
+        echo "[ERROR] No se pudo obtener enlace del túnel de Cloudflare."
+    fi
+}
+
 case "$ACTION" in
-    docker-local)   start_docker false ;;
-    docker-tunnel)  start_docker true ;;
-    node-local)     start_node false ;;
-    node-tunnel)    start_node true ;;
-    stop)           stop_all ;;
-    status)         show_status ;;
+    docker-local)       start_docker false ;;
+    docker-tunnel)      start_docker true ;;
+    node-local)         start_node false ;;
+    node-tunnel)        start_node true ;;
+    reconnect-tunnel)   reconnect_tunnel ;;
+    stop)               stop_all ;;
+    status)             show_status ;;
     menu|*)
         while true; do
             clear
@@ -209,6 +242,7 @@ case "$ACTION" in
             echo "  [4] Node.js - Cloudflare Tunnel"
             echo "  [5] Detener todos los servicios"
             echo "  [6] Ver estado"
+            echo "  [7] Reconectar Túnel Cloudflare (sin reiniciar n8n)"
             echo "  [0] Salir"
             echo "=========================================="
             read -p "Opción: " opt
@@ -219,6 +253,7 @@ case "$ACTION" in
                 4) start_node true; read -p "Presiona Enter para volver...";;
                 5) stop_all; read -p "Presiona Enter para volver...";;
                 6) show_status; read -p "Presiona Enter para volver...";;
+                7) reconnect_tunnel; read -p "Presiona Enter para volver...";;
                 0) exit 0;;
                 *) echo "Opción no válida."; sleep 1;;
             esac
