@@ -53,6 +53,8 @@ sync_encryption_key() {
 # Ensure persistent key and safe permissions
 [ -z "$(get_env "N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS" "")" ] && set_env "N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS" "false"
 [ -z "$(get_env "N8N_USER_FOLDER" "")" ] && set_env "N8N_USER_FOLDER" "./data"
+[ -z "$(get_env "N8N_UNVERIFIED_PACKAGES_ENABLED" "")" ] && set_env "N8N_UNVERIFIED_PACKAGES_ENABLED" "true"
+[ -z "$(get_env "N8N_RUNNERS_ENABLED" "")" ] && set_env "N8N_RUNNERS_ENABLED" "false"
 sync_encryption_key
 
 PORT=$(get_env "N8N_PORT" "5678")
@@ -73,7 +75,6 @@ start_docker() {
         URL=$(grep -oE "https://[a-zA-Z0-9-]+\.trycloudflare\.com" .cloudflare.log 2>/dev/null | head -n 1)
         if [ -n "$URL" ]; then
             echo "$URL/" > .cloudflare.url
-            set_env "WEBHOOK_URL" "$URL/"
             set_env "N8N_WEBHOOK_URL" "$URL/"
             echo "[OK] URL Pública: $URL/"
         fi
@@ -97,6 +98,9 @@ start_node() {
     export N8N_SSRF_PROTECTION_ENABLED="false"
     export N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS="false"
     export N8N_PROXY_HOPS="1"
+    export N8N_UNVERIFIED_PACKAGES_ENABLED="true"
+    export N8N_RUNNERS_ENABLED="false"
+    unset WEBHOOK_URL 2>/dev/null || true
     
     ENC=$(get_env "N8N_ENCRYPTION_KEY" "")
     [ -n "$ENC" ] && export N8N_ENCRYPTION_KEY="$ENC"
@@ -110,9 +114,7 @@ start_node() {
         URL=$(grep -oE "https://[a-zA-Z0-9-]+\.trycloudflare\.com" .cloudflare.log 2>/dev/null | head -n 1)
         if [ -n "$URL" ]; then
             echo "$URL/" > .cloudflare.url
-            export WEBHOOK_URL="$URL/"
             export N8N_WEBHOOK_URL="$URL/"
-            set_env "WEBHOOK_URL" "$URL/"
             set_env "N8N_WEBHOOK_URL" "$URL/"
             echo "[OK] URL Pública: $URL/"
         fi

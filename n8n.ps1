@@ -56,6 +56,16 @@ function Initialize-Environment {
         Set-EnvFileVar "N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS" "false"
     }
 
+    $unverified = Get-EnvVar "N8N_UNVERIFIED_PACKAGES_ENABLED" ""
+    if (-not $unverified) {
+        Set-EnvFileVar "N8N_UNVERIFIED_PACKAGES_ENABLED" "true"
+    }
+
+    $runners = Get-EnvVar "N8N_RUNNERS_ENABLED" ""
+    if (-not $runners) {
+        Set-EnvFileVar "N8N_RUNNERS_ENABLED" "false"
+    }
+
     Sync-EncryptionKey | Out-Null
 
     $dataDb = Join-Path $PSScriptRoot "data\database.sqlite"
@@ -141,6 +151,22 @@ function Load-EnvToProcess {
     if (-not $proxyHops) {
         $env:N8N_PROXY_HOPS = "1"
         [Environment]::SetEnvironmentVariable("N8N_PROXY_HOPS", "1", "Process")
+    }
+
+    $env:N8N_UNVERIFIED_PACKAGES_ENABLED = "true"
+    [Environment]::SetEnvironmentVariable("N8N_UNVERIFIED_PACKAGES_ENABLED", "true", "Process")
+
+    $env:N8N_RUNNERS_ENABLED = "false"
+    [Environment]::SetEnvironmentVariable("N8N_RUNNERS_ENABLED", "false", "Process")
+
+    # Limpiar variable obsoleta WEBHOOK_URL para evitar advertencia de deprecación
+    if ($env:WEBHOOK_URL) {
+        if (-not $env:N8N_WEBHOOK_URL) {
+            $env:N8N_WEBHOOK_URL = $env:WEBHOOK_URL
+            [Environment]::SetEnvironmentVariable("N8N_WEBHOOK_URL", $env:WEBHOOK_URL, "Process")
+        }
+        $env:WEBHOOK_URL = $null
+        [Environment]::SetEnvironmentVariable("WEBHOOK_URL", $null, "Process")
     }
 }
 
@@ -326,12 +352,11 @@ function Start-DockerMode([bool]$useTunnel) {
     if ($useTunnel) {
         $tUrl = Start-CloudflareTunnel $envPort
         if ($tUrl) {
-            Set-EnvFileVar "WEBHOOK_URL" $tUrl
             Set-EnvFileVar "N8N_WEBHOOK_URL" $tUrl
-            $env:WEBHOOK_URL = $tUrl
             $env:N8N_WEBHOOK_URL = $tUrl
-            [Environment]::SetEnvironmentVariable("WEBHOOK_URL", $tUrl, "Process")
             [Environment]::SetEnvironmentVariable("N8N_WEBHOOK_URL", $tUrl, "Process")
+            $env:WEBHOOK_URL = $null
+            [Environment]::SetEnvironmentVariable("WEBHOOK_URL", $null, "Process")
         }
     }
 
@@ -367,12 +392,11 @@ function Start-NodeMode([bool]$useTunnel) {
     if ($useTunnel) {
         $tUrl = Start-CloudflareTunnel $envPort
         if ($tUrl) {
-            $env:WEBHOOK_URL = $tUrl
             $env:N8N_WEBHOOK_URL = $tUrl
-            Set-EnvFileVar "WEBHOOK_URL" $tUrl
             Set-EnvFileVar "N8N_WEBHOOK_URL" $tUrl
-            [Environment]::SetEnvironmentVariable("WEBHOOK_URL", $tUrl, "Process")
             [Environment]::SetEnvironmentVariable("N8N_WEBHOOK_URL", $tUrl, "Process")
+            $env:WEBHOOK_URL = $null
+            [Environment]::SetEnvironmentVariable("WEBHOOK_URL", $null, "Process")
         }
     }
 
